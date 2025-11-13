@@ -96,9 +96,8 @@ if page == "Volcano Plot (DE Results)":
             mime="image/svg+xml"
         )
 
-
 # =========================================================================================
-# HEATMAP PAGE (ROBUST, NO CRASHES, PLOT ONLY FOUND GENES)
+# HEATMAP PAGE (GROUPING RESTORED + BULLETPROOF + GENE FILTER FIXED)
 # =========================================================================================
 
 if page == "Heatmap (Imputed Proteomics)":
@@ -110,10 +109,10 @@ if page == "Heatmap (Imputed Proteomics)":
         df = pd.read_csv(prot_file)
 
         meta = df.iloc[:, :3]
-        expr = df.iloc[:, 3:].copy()  # all abundance columns
+        expr = df.iloc[:, 3:].copy()
 
         # ---------------------------------------------------------
-        # GENE INPUT
+        # GENE INPUT (robust)
         # ---------------------------------------------------------
         st.subheader("Gene Selection")
         gene_text = st.text_area(
@@ -132,14 +131,14 @@ if page == "Heatmap (Imputed Proteomics)":
             gene_list = []
 
         df["__gene_upper__"] = df["Gene_name"].str.upper()
-
         df_found = df[df["__gene_upper__"].isin(gene_list)]
 
+        # nothing found → clean stop
         if len(df_found) == 0 and len(gene_list) > 0:
-            st.warning("None of the entered genes were found. Showing nothing.")
+            st.warning("None of the entered genes were found in the dataset.")
             st.stop()
 
-        # If user entered nothing → show full matrix
+        # user entered nothing → show full dataset
         if len(gene_list) == 0:
             df_found = df.copy()
 
@@ -147,20 +146,41 @@ if page == "Heatmap (Imputed Proteomics)":
         expr_sel.index = df_found["Gene_name"].values
 
         # ---------------------------------------------------------
-        # SAMPLE / CONDITION SELECTION
+        # GROUP or RAW SAMPLE SELECTION
         # ---------------------------------------------------------
         st.subheader("Samples or Conditions")
         sample_names = list(expr_sel.columns)
 
-        selected_samples = st.multiselect(
-            "Select samples:",
-            sample_names,
-            default=sample_names
-        )
-        expr_sel = expr_sel[selected_samples]
+        use_group_avg = st.checkbox("Use group averages?", False)
+
+        if use_group_avg:
+            # detect prefixes
+            condition_ids = sorted({ col.rsplit("_",1)[0] for col in sample_names })
+
+            selected_conditions = st.multiselect(
+                "Select conditions:",
+                condition_ids,
+                default=condition_ids
+            )
+
+            df_groups = {}
+            for cond in selected_conditions:
+                reps = [c for c in sample_names if c.startswith(cond)]
+                if len(reps) > 0:
+                    df_groups[cond] = expr_sel[reps].mean(axis=1)
+
+            expr_sel = pd.DataFrame(df_groups)
+
+        else:
+            selected_samples = st.multiselect(
+                "Select samples:",
+                sample_names,
+                default=sample_names
+            )
+            expr_sel = expr_sel[selected_samples]
 
         # ---------------------------------------------------------
-        # SCALING (SAFE)
+        # SCALING (never drops anything)
         # ---------------------------------------------------------
         st.subheader("Scaling")
         scale_mode = st.selectbox("Scale:", ["None", "Row", "Column"])
@@ -171,6 +191,7 @@ if page == "Heatmap (Imputed Proteomics)":
             means = expr_scaled.mean(axis=1)
             stds = expr_scaled.std(axis=1).replace(0, np.nan)
             expr_scaled = expr_scaled.sub(means, axis=0).div(stds, axis=0)
+
         elif scale_mode == "Column":
             means = expr_scaled.mean(axis=0)
             stds = expr_scaled.std(axis=0).replace(0, np.nan)
@@ -179,18 +200,13 @@ if page == "Heatmap (Imputed Proteomics)":
         expr_scaled = expr_scaled.replace([np.inf, -np.inf], np.nan).fillna(0)
 
         # ---------------------------------------------------------
-        # SAFE CHECKS
+        # SAFE LIMITS FOR SEABORN
         # ---------------------------------------------------------
-        if expr_scaled.shape[0] == 0 or expr_scaled.shape[1] == 0:
-            st.error("No valid data left to plot.")
-            st.stop()
-
-        # Avoid zero-range crash
         if np.all(expr_scaled.to_numpy() == 0):
             vmin, vmax = -1, 1
         else:
-            vmin = np.nanmin(expr_scaled.to_numpy())
-            vmax = np.nanmax(expr_scaled.to_numpy())
+            vmin = float(np.nanmin(expr_scaled.to_numpy()))
+            vmax = float(np.nanmax(expr_scaled.to_numpy()))
             if vmin == vmax:
                 vmin -= 1
                 vmax += 1
@@ -201,9 +217,14 @@ if page == "Heatmap (Imputed Proteomics)":
         st.subheader("Clustering")
         row_cluster = st.checkbox("Cluster rows?", True)
         col_cluster = st.checkbox("Cluster columns?", True)
-        cluster_method = st.selectbox("Clustering method:",
-                                      ["average", "complete", "ward", "single"])
-        cmap_choice = st.selectbox("Colormap:", ["viridis", "plasma", "inferno", "magma", "cividis"])
+
+        cluster_method = st.selectbox(
+            "Clustering method:", ["average", "complete", "ward", "single"]
+        )
+        cmap_choice = st.selectbox(
+            "Colormap:", ["viridis", "plasma", "inferno", "magma", "cividis"]
+        )
+
         width = st.slider("Heatmap Width", 4, 20, 10)
         height = st.slider("Heatmap Height", 4, 20, 12)
 
@@ -211,7 +232,7 @@ if page == "Heatmap (Imputed Proteomics)":
         safe_col = col_cluster and expr_scaled.shape[1] > 1
 
         # ---------------------------------------------------------
-        # HEATMAP (NEVER CRASHES)
+        # HEATMAP — never crashes
         # ---------------------------------------------------------
         g = sns.clustermap(
             expr_scaled,
