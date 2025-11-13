@@ -74,12 +74,10 @@ if page == "Volcano Plot (DE Results)":
                 ax.scatter(gdf["logFC"], gdf["neglog10p"],
                            c="yellow", edgecolor="black", s=point_size*2, linewidth=1.5)
 
-        if label_top > 0:
+        if label_top > 0 and "Gene" in df.columns:
             df_sort = df.sort_values(p_col).head(label_top)
             for _, row in df_sort.iterrows():
-                if "Gene" in df.columns:
-                    ax.text(row["logFC"], row["neglog10p"],
-                            str(row["Gene"]), fontsize=9)
+                ax.text(row["logFC"], row["neglog10p"], str(row["Gene"]), fontsize=9)
 
         ax.axhline(-np.log10(p_thresh), color="black", ls="--")
         ax.axvline(logfc_thresh,       color="black", ls="--")
@@ -98,8 +96,9 @@ if page == "Volcano Plot (DE Results)":
             mime="image/svg+xml"
         )
 
+
 # =========================================================================================
-# HEATMAP PAGE
+# HEATMAP PAGE  (FULLY FIXED + SAFE)
 # =========================================================================================
 
 if page == "Heatmap (Imputed Proteomics)":
@@ -168,20 +167,34 @@ if page == "Heatmap (Imputed Proteomics)":
             expr_sel = expr[selected_samples]
 
         # --------------------------------------------------------------------------
-        # SCALING
+        # SAFE SCALING (no NaNs)
         # --------------------------------------------------------------------------
         st.subheader("Scaling")
         scale_mode = st.selectbox("Scale:", ["None", "Row", "Column"])
 
+        expr_scaled = expr_sel.copy()
+
         if scale_mode == "Row":
-            expr_scaled = (expr_sel - expr_sel.mean(axis=1).values[:, None]) / expr_sel.std(axis=1).values[:, None]
+            means = expr_sel.mean(axis=1)
+            stds = expr_sel.std(axis=1).replace(0, np.nan)
+            expr_scaled = (expr_sel.subtract(means, axis=0)).div(stds, axis=0)
+            expr_scaled = expr_scaled.fillna(0)
+
         elif scale_mode == "Column":
-            expr_scaled = (expr_sel - expr_sel.mean()) / expr_sel.std()
-        else:
-            expr_scaled = expr_sel.copy()
+            means = expr_sel.mean(axis=0)
+            stds = expr_sel.std(axis=0).replace(0, np.nan)
+            expr_scaled = (expr_sel - means) / stds
+            expr_scaled = expr_scaled.fillna(0)
+
+        # Drop rows/cols that are entirely zero/NaN
+        expr_scaled = expr_scaled.replace([np.inf, -np.inf], np.nan).fillna(0)
+        expr_scaled = expr_scaled.loc[(expr_scaled != 0).any(axis=1)]
+        expr_scaled = expr_scaled.loc[:, (expr_scaled != 0).any(axis=0)]
+
+        st.write(f"Final matrix shape: {expr_scaled.shape}")
 
         # --------------------------------------------------------------------------
-        # CLUSTERING
+        # CLUSTERING SAFETY
         # --------------------------------------------------------------------------
         st.subheader("Clustering")
         row_cluster = st.checkbox("Cluster rows?", True)
@@ -195,29 +208,24 @@ if page == "Heatmap (Imputed Proteomics)":
         width = st.slider("Heatmap Width", 4, 20, 10)
         height = st.slider("Heatmap Height", 4, 20, 12)
 
-        # --------------------------------------------------------------------------
-        # SAFE CLUSTERING (prevents SciPy crashes)
-        # --------------------------------------------------------------------------
-        n_genes, n_samples = expr_scaled.shape
+        # Auto-disable if < 2
+        safe_row = row_cluster and expr_scaled.shape[0] >= 2
+        safe_col = col_cluster and expr_scaled.shape[1] >= 2
 
-        safe_row_cluster = row_cluster if n_genes >= 2 else False
-        safe_col_cluster = col_cluster if n_samples >= 2 else False
-
-        if row_cluster and not safe_row_cluster:
-            st.warning("Row clustering disabled (need ≥ 2 genes).")
-
-        if col_cluster and not safe_col_cluster:
-            st.warning("Column clustering disabled (need ≥ 2 samples/conditions).")
+        if row_cluster and not safe_row:
+            st.warning("Row clustering disabled — need ≥2 genes")
+        if col_cluster and not safe_col:
+            st.warning("Column clustering disabled — need ≥2 samples")
 
         # --------------------------------------------------------------------------
-        # DRAW HEATMAP
+        # DRAW HEATMAP (always safe)
         # --------------------------------------------------------------------------
         g = sns.clustermap(
             expr_scaled,
             cmap=cmap_choice,
             method=cluster_method,
-            row_cluster=safe_row_cluster,
-            col_cluster=safe_col_cluster,
+            row_cluster=safe_row,
+            col_cluster=safe_col,
             figsize=(width, height)
         )
 
