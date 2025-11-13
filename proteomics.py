@@ -63,7 +63,9 @@ uploaded = st.file_uploader("Upload proteomics matrix (.xlsx)", type=["xlsx"])
 if uploaded is not None:
     df = pd.read_excel(uploaded)
     metadata_cols = 4
-    df_numeric = df.iloc[:, metadata_cols:].astype(float)
+    df_numeric = df.iloc[:, metadata_cols:].apply(
+    lambda col: pd.to_numeric(col, errors="coerce")
+)
 
     st.subheader("Step 1 — Imputation")
     imp_method = st.selectbox("Imputation method:", ["Minimum", "Random from bottom 5%"])
