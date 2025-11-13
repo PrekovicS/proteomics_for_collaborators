@@ -26,7 +26,7 @@ page = st.sidebar.radio(
 )
 
 # =========================================================================================
-# PAGE 1 — VOLCANO PLOTS  (UNCHANGED — AS REQUESTED)
+# PAGE 1 — VOLCANO PLOTS  (UNCHANGED)
 # =========================================================================================
 
 if page == "Volcano Plot (DE Results)":
@@ -134,7 +134,7 @@ if page == "Volcano Plot (DE Results)":
         )
 
 # =========================================================================================
-# PAGE 2 — HEATMAPS (UPDATED)
+# PAGE 2 — HEATMAPS (UPDATED WITH GENE SELECTION + GROUP SELECTION)
 # =========================================================================================
 
 if page == "Heatmap (Imputed Proteomics)":
@@ -147,27 +147,41 @@ if page == "Heatmap (Imputed Proteomics)":
 
         df = pd.read_csv(prot_file)
 
+        # Metadata + expression
         meta = df.iloc[:, :3]
         expr = df.iloc[:, 3:]
         sample_names = list(expr.columns)
 
-        st.subheader("Sample or Condition Selection")
+        all_genes = meta["Gene_name"].tolist()
+
+        st.subheader("Gene Selection")
+        gene_selection = st.multiselect(
+            "Select genes to plot (leave empty to use ALL genes):",
+            options=all_genes,
+            default=[],
+        )
+
+        # If genes selected → filter expression rows
+        if gene_selection:
+            expr = expr[df["Gene_name"].isin(gene_selection)]
+            df = df[df["Gene_name"].isin(gene_selection)]
+
+        st.subheader("Samples or Conditions")
 
         # Group-average mode
         use_group_avg = st.checkbox("Use group averages instead of replicates?", False)
 
         if use_group_avg:
 
-            # Extract condition ID (everything before final _0X replicate index)
+            # extract condition IDs
             condition_ids = sorted({name.rsplit("_", 1)[0] for name in sample_names})
 
             selected_conditions = st.multiselect(
                 "Select conditions to include:",
                 condition_ids,
-                default=condition_ids
+                default=condition_ids,
             )
 
-            # Build averaged expression
             df_groups = {}
             for cond in selected_conditions:
                 reps = [c for c in sample_names if c.startswith(cond)]
@@ -176,16 +190,17 @@ if page == "Heatmap (Imputed Proteomics)":
             expr_sel = pd.DataFrame(df_groups)
 
         else:
-            # Normal sample selection
+
             selected_samples = st.multiselect(
                 "Select samples to include:",
                 sample_names,
-                default=sample_names
+                default=sample_names,
             )
             expr_sel = expr[selected_samples]
 
+
         # Scaling
-        st.subheader("Scaling Options")
+        st.subheader("Scaling")
 
         scale_mode = st.selectbox("Scale:", ["None", "Row", "Column"])
 
@@ -196,24 +211,22 @@ if page == "Heatmap (Imputed Proteomics)":
         else:
             expr_scaled = expr_sel.copy()
 
-        # Clustering
-        st.subheader("Clustering Options")
+        # Clustering options
+        st.subheader("Clustering")
 
         row_cluster = st.checkbox("Cluster rows?", True)
         col_cluster = st.checkbox("Cluster columns?", True)
         cluster_method = st.selectbox("Clustering method",
                                       ["average", "complete", "ward", "single"])
 
-        # Colour palette
+        # Colour map
         cmap_choice = st.selectbox("Viridis palette:",
                                    ["viridis", "plasma", "inferno", "magma", "cividis"])
 
         width = st.slider("Heatmap Width", 4, 20, 10)
         height = st.slider("Heatmap Height", 4, 20, 12)
 
-        st.subheader("Heatmap")
-
-        # Draw heatmap
+        # Plot heatmap
         g = sns.clustermap(
             expr_scaled,
             cmap=cmap_choice,
