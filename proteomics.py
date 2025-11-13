@@ -98,7 +98,7 @@ if page == "Volcano Plot (DE Results)":
 
 
 # =========================================================================================
-# HEATMAP PAGE  (FULLY FIXED + SAFE)
+# HEATMAP PAGE — BULLETPROOF VERSION
 # =========================================================================================
 
 if page == "Heatmap (Imputed Proteomics)":
@@ -135,7 +135,7 @@ if page == "Heatmap (Imputed Proteomics)":
         expr.index = df["Gene_name"].values
 
         # --------------------------------------------------------------------------
-        # SAMPLE OR CONDITION SELECTION
+        # SAMPLE/CONDITION SELECTION
         # --------------------------------------------------------------------------
         st.subheader("Samples or Conditions")
         sample_names = list(expr.columns)
@@ -167,7 +167,7 @@ if page == "Heatmap (Imputed Proteomics)":
             expr_sel = expr[selected_samples]
 
         # --------------------------------------------------------------------------
-        # SAFE SCALING (no NaNs)
+        # SAFE SCALING
         # --------------------------------------------------------------------------
         st.subheader("Scaling")
         scale_mode = st.selectbox("Scale:", ["None", "Row", "Column"])
@@ -178,23 +178,34 @@ if page == "Heatmap (Imputed Proteomics)":
             means = expr_sel.mean(axis=1)
             stds = expr_sel.std(axis=1).replace(0, np.nan)
             expr_scaled = (expr_sel.subtract(means, axis=0)).div(stds, axis=0)
-            expr_scaled = expr_scaled.fillna(0)
-
         elif scale_mode == "Column":
             means = expr_sel.mean(axis=0)
             stds = expr_sel.std(axis=0).replace(0, np.nan)
             expr_scaled = (expr_sel - means) / stds
-            expr_scaled = expr_scaled.fillna(0)
 
-        # Drop rows/cols that are entirely zero/NaN
+        # Replace NaN/inf with 0
         expr_scaled = expr_scaled.replace([np.inf, -np.inf], np.nan).fillna(0)
+
+        # Drop all-zero rows/cols — they break seaborn
         expr_scaled = expr_scaled.loc[(expr_scaled != 0).any(axis=1)]
         expr_scaled = expr_scaled.loc[:, (expr_scaled != 0).any(axis=0)]
 
-        st.write(f"Final matrix shape: {expr_scaled.shape}")
+        # --------------------------------------------------------------------------
+        # FINAL SAFETY CHECK — A MUST
+        # --------------------------------------------------------------------------
+        if expr_scaled.size == 0 or expr_scaled.shape[0] == 0 or expr_scaled.shape[1] == 0:
+            st.error("No valid expression values left to plot. Try selecting more genes or samples.")
+            st.stop()
+
+        if np.all(expr_scaled.to_numpy() == 0):
+            st.warning("All expression values are zero after scaling. Using artificial vmin/vmax to prevent seaborn crash.")
+            vmin, vmax = -1, 1
+        else:
+            vmin = expr_scaled.min().min()
+            vmax = expr_scaled.max().max()
 
         # --------------------------------------------------------------------------
-        # CLUSTERING SAFETY
+        # CLUSTERING
         # --------------------------------------------------------------------------
         st.subheader("Clustering")
         row_cluster = st.checkbox("Cluster rows?", True)
@@ -208,17 +219,11 @@ if page == "Heatmap (Imputed Proteomics)":
         width = st.slider("Heatmap Width", 4, 20, 10)
         height = st.slider("Heatmap Height", 4, 20, 12)
 
-        # Auto-disable if < 2
         safe_row = row_cluster and expr_scaled.shape[0] >= 2
         safe_col = col_cluster and expr_scaled.shape[1] >= 2
 
-        if row_cluster and not safe_row:
-            st.warning("Row clustering disabled — need ≥2 genes")
-        if col_cluster and not safe_col:
-            st.warning("Column clustering disabled — need ≥2 samples")
-
         # --------------------------------------------------------------------------
-        # DRAW HEATMAP (always safe)
+        # DRAW HEATMAP — GUARANTEED SAFE
         # --------------------------------------------------------------------------
         g = sns.clustermap(
             expr_scaled,
@@ -226,7 +231,9 @@ if page == "Heatmap (Imputed Proteomics)":
             method=cluster_method,
             row_cluster=safe_row,
             col_cluster=safe_col,
-            figsize=(width, height)
+            figsize=(width, height),
+            vmin=vmin,
+            vmax=vmax
         )
 
         st.pyplot(g.fig)
