@@ -228,24 +228,36 @@ if page == "Heatmap (Imputed Proteomics)":
 
         width = st.slider("Heatmap Width", 4, 20, 10)
         height = st.slider("Heatmap Height", 4, 20, 12)
+        
+# -----------------------------------------------------
+# Draw heatmap — SAFE CLUSTERING
+# -----------------------------------------------------
 
-        # -----------------------------------------------------
-        # Draw heatmap
-        # -----------------------------------------------------
-        g = sns.clustermap(
-            expr_scaled,
-            cmap=cmap_choice,
-            method=cluster_method,
-            row_cluster=row_cluster,
-            col_cluster=col_cluster,
-            figsize=(width, height)
-        )
+n_genes, n_samples = expr_scaled.shape
 
-        st.pyplot(g.fig)
+safe_row_cluster = row_cluster if n_genes >= 2 else False
+safe_col_cluster = col_cluster if n_samples >= 2 else False
 
-        st.download_button(
-            "Download Heatmap (SVG)",
-            data=fig_to_svg(g.fig),
-            file_name="heatmap.svg",
-            mime="image/svg+xml"
-        )
+if not safe_row_cluster and row_cluster:
+    st.warning("Row clustering disabled automatically (need ≥ 2 genes).")
+
+if not safe_col_cluster and col_cluster:
+    st.warning("Column clustering disabled automatically (need ≥ 2 samples/conditions).")
+
+g = sns.clustermap(
+    expr_scaled,
+    cmap=cmap_choice,
+    method=cluster_method,
+    row_cluster=safe_row_cluster,
+    col_cluster=safe_col_cluster,
+    figsize=(width, height)
+)
+
+st.pyplot(g.fig)
+
+st.download_button(
+    "Download Heatmap (SVG)",
+    data=fig_to_svg(g.fig),
+    file_name="heatmap.svg",
+    mime="image/svg+xml"
+)
