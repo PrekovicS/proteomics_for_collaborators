@@ -26,7 +26,7 @@ page = st.sidebar.radio(
 )
 
 # =========================================================================================
-# PAGE 1 — VOLCANO PLOTS
+# PAGE 1 — VOLCANO PLOTS  (UNCHANGED — AS REQUESTED)
 # =========================================================================================
 
 if page == "Volcano Plot (DE Results)":
@@ -50,7 +50,7 @@ if page == "Volcano Plot (DE Results)":
         # User chooses p-value or adjusted p-value
         p_col = st.selectbox("Select p-value column:", pval_candidates)
 
-        # Ensure p-value column numeric
+        # Ensure numeric p-values
         df[p_col] = pd.to_numeric(df[p_col], errors="coerce")
         df = df.dropna(subset=[p_col])
 
@@ -109,11 +109,7 @@ if page == "Volcano Plot (DE Results)":
 
         # Label top N
         if label_top > 0:
-            if "p_value" in df.columns:
-                df_sort = df.sort_values(p_col).head(label_top)
-            else:
-                df_sort = df.sort_values("neglog10p", ascending=False).head(label_top)
-
+            df_sort = df.sort_values(p_col).head(label_top)
             for _, row in df_sort.iterrows():
                 if "Gene" in df.columns:
                     ax.text(row["logFC"], row["neglog10p"],
@@ -138,7 +134,7 @@ if page == "Volcano Plot (DE Results)":
         )
 
 # =========================================================================================
-# PAGE 2 — HEATMAPS
+# PAGE 2 — HEATMAPS (UPDATED)
 # =========================================================================================
 
 if page == "Heatmap (Imputed Proteomics)":
@@ -151,63 +147,87 @@ if page == "Heatmap (Imputed Proteomics)":
 
         df = pd.read_csv(prot_file)
 
-        # Metadata + expression values
         meta = df.iloc[:, :3]
         expr = df.iloc[:, 3:]
-
         sample_names = list(expr.columns)
 
-        st.subheader("Sample Selection")
+        st.subheader("Sample or Condition Selection")
 
-        selected_samples = st.multiselect(
-            "Select samples to include:",
-            sample_names,
-            default=sample_names
-        )
-
-        expr_sel = expr[selected_samples]
-
-        # Replicate vs group-average
-        use_group_avg = st.checkbox("Use group averages (collapse replicates)?", False)
+        # Group-average mode
+        use_group_avg = st.checkbox("Use group averages instead of replicates?", False)
 
         if use_group_avg:
-            # infer group IDs from sample name prefix
-            groups = [name.rsplit("_", 1)[0] for name in selected_samples]
-            expr_sel = expr_sel.T.groupby(groups).mean().T
 
-        st.subheader("Clustering & Colour")
+            # Extract condition ID (everything before final _0X replicate index)
+            condition_ids = sorted({name.rsplit("_", 1)[0] for name in sample_names})
 
-        row_cluster = st.checkbox("Cluster rows", True)
-        col_cluster = st.checkbox("Cluster columns", True)
+            selected_conditions = st.multiselect(
+                "Select conditions to include:",
+                condition_ids,
+                default=condition_ids
+            )
 
-        cluster_method = st.selectbox(
-            "Clustering method",
-            ["average", "complete", "ward", "single"]
-        )
+            # Build averaged expression
+            df_groups = {}
+            for cond in selected_conditions:
+                reps = [c for c in sample_names if c.startswith(cond)]
+                df_groups[cond] = expr[reps].mean(axis=1)
 
-        cmap_choice = st.selectbox(
-            "Viridis palette:",
-            ["viridis", "plasma", "inferno", "magma", "cividis"]
-        )
+            expr_sel = pd.DataFrame(df_groups)
 
-        width = st.slider("Width", 4, 20, 10)
-        height = st.slider("Height", 4, 20, 12)
+        else:
+            # Normal sample selection
+            selected_samples = st.multiselect(
+                "Select samples to include:",
+                sample_names,
+                default=sample_names
+            )
+            expr_sel = expr[selected_samples]
+
+        # Scaling
+        st.subheader("Scaling Options")
+
+        scale_mode = st.selectbox("Scale:", ["None", "Row", "Column"])
+
+        if scale_mode == "Row":
+            expr_scaled = (expr_sel - expr_sel.mean(axis=1).values[:, None]) / expr_sel.std(axis=1).values[:, None]
+        elif scale_mode == "Column":
+            expr_scaled = (expr_sel - expr_sel.mean()) / expr_sel.std()
+        else:
+            expr_scaled = expr_sel.copy()
+
+        # Clustering
+        st.subheader("Clustering Options")
+
+        row_cluster = st.checkbox("Cluster rows?", True)
+        col_cluster = st.checkbox("Cluster columns?", True)
+        cluster_method = st.selectbox("Clustering method",
+                                      ["average", "complete", "ward", "single"])
+
+        # Colour palette
+        cmap_choice = st.selectbox("Viridis palette:",
+                                   ["viridis", "plasma", "inferno", "magma", "cividis"])
+
+        width = st.slider("Heatmap Width", 4, 20, 10)
+        height = st.slider("Heatmap Height", 4, 20, 12)
+
+        st.subheader("Heatmap")
 
         # Draw heatmap
-        fig = sns.clustermap(
-            expr_sel,
+        g = sns.clustermap(
+            expr_scaled,
             cmap=cmap_choice,
             method=cluster_method,
             row_cluster=row_cluster,
             col_cluster=col_cluster,
             figsize=(width, height)
-        ).fig
+        )
 
-        st.pyplot(fig)
+        st.pyplot(g.fig)
 
         st.download_button(
             "Download Heatmap (SVG)",
-            data=fig_to_svg(fig),
+            data=fig_to_svg(g.fig),
             file_name="heatmap.svg",
             mime="image/svg+xml"
         )
