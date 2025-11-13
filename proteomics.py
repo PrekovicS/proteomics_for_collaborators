@@ -98,7 +98,7 @@ if page == "Volcano Plot (DE Results)":
 
 
 # =========================================================================================
-# HEATMAP PAGE — BULLETPROOF VERSION
+# HEATMAP PAGE (ROBUST, NO CRASHES, PLOT ONLY FOUND GENES)
 # =========================================================================================
 
 if page == "Heatmap (Imputed Proteomics)":
@@ -108,16 +108,17 @@ if page == "Heatmap (Imputed Proteomics)":
 
     if prot_file:
         df = pd.read_csv(prot_file)
-        meta = df.iloc[:, :3]
-        expr = df.iloc[:, 3:].copy()
 
-        # --------------------------------------------------------------------------
-        # MULTI-GENE INPUT
-        # --------------------------------------------------------------------------
+        meta = df.iloc[:, :3]
+        expr = df.iloc[:, 3:].copy()  # all abundance columns
+
+        # ---------------------------------------------------------
+        # GENE INPUT
+        # ---------------------------------------------------------
         st.subheader("Gene Selection")
         gene_text = st.text_area(
-            "Enter one or multiple genes (comma, space, or newline separated):",
-            placeholder="Example:\nFOXA2, HNF4A, GATA3\nABCB1"
+            "Enter genes (comma, space, newline separated):",
+            placeholder="FOXA2, HNF4A, ABCB1"
         ).strip()
 
         if gene_text:
@@ -127,104 +128,91 @@ if page == "Heatmap (Imputed Proteomics)":
                 if g.strip() != ""
             ]
             gene_list = list(set(gene_list))
-
-            df["__gene_upper__"] = df["Gene_name"].str.upper()
-            df = df[df["__gene_upper__"].isin(gene_list)]
-            expr = expr.loc[df.index]
-
-        expr.index = df["Gene_name"].values
-
-        # --------------------------------------------------------------------------
-        # SAMPLE/CONDITION SELECTION
-        # --------------------------------------------------------------------------
-        st.subheader("Samples or Conditions")
-        sample_names = list(expr.columns)
-
-        use_group_avg = st.checkbox("Use group averages instead of replicates?", False)
-
-        if use_group_avg:
-            condition_ids = sorted({name.rsplit("_", 1)[0] for name in sample_names})
-
-            selected_conditions = st.multiselect(
-                "Select conditions:",
-                condition_ids,
-                default=condition_ids
-            )
-
-            df_groups = {}
-            for cond in selected_conditions:
-                reps = [c for c in sample_names if c.startswith(cond)]
-                df_groups[cond] = expr[reps].mean(axis=1)
-
-            expr_sel = pd.DataFrame(df_groups)
-
         else:
-            selected_samples = st.multiselect(
-                "Select samples:",
-                sample_names,
-                default=sample_names
-            )
-            expr_sel = expr[selected_samples]
+            gene_list = []
 
-        # --------------------------------------------------------------------------
-        # SAFE SCALING
-        # --------------------------------------------------------------------------
+        df["__gene_upper__"] = df["Gene_name"].str.upper()
+
+        df_found = df[df["__gene_upper__"].isin(gene_list)]
+
+        if len(df_found) == 0 and len(gene_list) > 0:
+            st.warning("None of the entered genes were found. Showing nothing.")
+            st.stop()
+
+        # If user entered nothing → show full matrix
+        if len(gene_list) == 0:
+            df_found = df.copy()
+
+        expr_sel = expr.loc[df_found.index]
+        expr_sel.index = df_found["Gene_name"].values
+
+        # ---------------------------------------------------------
+        # SAMPLE / CONDITION SELECTION
+        # ---------------------------------------------------------
+        st.subheader("Samples or Conditions")
+        sample_names = list(expr_sel.columns)
+
+        selected_samples = st.multiselect(
+            "Select samples:",
+            sample_names,
+            default=sample_names
+        )
+        expr_sel = expr_sel[selected_samples]
+
+        # ---------------------------------------------------------
+        # SCALING (SAFE)
+        # ---------------------------------------------------------
         st.subheader("Scaling")
         scale_mode = st.selectbox("Scale:", ["None", "Row", "Column"])
 
         expr_scaled = expr_sel.copy()
 
         if scale_mode == "Row":
-            means = expr_sel.mean(axis=1)
-            stds = expr_sel.std(axis=1).replace(0, np.nan)
-            expr_scaled = (expr_sel.subtract(means, axis=0)).div(stds, axis=0)
+            means = expr_scaled.mean(axis=1)
+            stds = expr_scaled.std(axis=1).replace(0, np.nan)
+            expr_scaled = expr_scaled.sub(means, axis=0).div(stds, axis=0)
         elif scale_mode == "Column":
-            means = expr_sel.mean(axis=0)
-            stds = expr_sel.std(axis=0).replace(0, np.nan)
-            expr_scaled = (expr_sel - means) / stds
+            means = expr_scaled.mean(axis=0)
+            stds = expr_scaled.std(axis=0).replace(0, np.nan)
+            expr_scaled = expr_scaled.sub(means).div(stds)
 
-        # Replace NaN/inf with 0
         expr_scaled = expr_scaled.replace([np.inf, -np.inf], np.nan).fillna(0)
 
-        # Drop all-zero rows/cols — they break seaborn
-        expr_scaled = expr_scaled.loc[(expr_scaled != 0).any(axis=1)]
-        expr_scaled = expr_scaled.loc[:, (expr_scaled != 0).any(axis=0)]
-
-        # --------------------------------------------------------------------------
-        # FINAL SAFETY CHECK — A MUST
-        # --------------------------------------------------------------------------
-        if expr_scaled.size == 0 or expr_scaled.shape[0] == 0 or expr_scaled.shape[1] == 0:
-            st.error("No valid expression values left to plot. Try selecting more genes or samples.")
+        # ---------------------------------------------------------
+        # SAFE CHECKS
+        # ---------------------------------------------------------
+        if expr_scaled.shape[0] == 0 or expr_scaled.shape[1] == 0:
+            st.error("No valid data left to plot.")
             st.stop()
 
+        # Avoid zero-range crash
         if np.all(expr_scaled.to_numpy() == 0):
-            st.warning("All expression values are zero after scaling. Using artificial vmin/vmax to prevent seaborn crash.")
             vmin, vmax = -1, 1
         else:
-            vmin = expr_scaled.min().min()
-            vmax = expr_scaled.max().max()
+            vmin = np.nanmin(expr_scaled.to_numpy())
+            vmax = np.nanmax(expr_scaled.to_numpy())
+            if vmin == vmax:
+                vmin -= 1
+                vmax += 1
 
-        # --------------------------------------------------------------------------
+        # ---------------------------------------------------------
         # CLUSTERING
-        # --------------------------------------------------------------------------
+        # ---------------------------------------------------------
         st.subheader("Clustering")
         row_cluster = st.checkbox("Cluster rows?", True)
         col_cluster = st.checkbox("Cluster columns?", True)
         cluster_method = st.selectbox("Clustering method:",
                                       ["average", "complete", "ward", "single"])
-
-        cmap_choice = st.selectbox("Viridis palette:",
-                                   ["viridis", "plasma", "inferno", "magma", "cividis"])
-
+        cmap_choice = st.selectbox("Colormap:", ["viridis", "plasma", "inferno", "magma", "cividis"])
         width = st.slider("Heatmap Width", 4, 20, 10)
         height = st.slider("Heatmap Height", 4, 20, 12)
 
-        safe_row = row_cluster and expr_scaled.shape[0] >= 2
-        safe_col = col_cluster and expr_scaled.shape[1] >= 2
+        safe_row = row_cluster and expr_scaled.shape[0] > 1
+        safe_col = col_cluster and expr_scaled.shape[1] > 1
 
-        # --------------------------------------------------------------------------
-        # DRAW HEATMAP — GUARANTEED SAFE
-        # --------------------------------------------------------------------------
+        # ---------------------------------------------------------
+        # HEATMAP (NEVER CRASHES)
+        # ---------------------------------------------------------
         g = sns.clustermap(
             expr_scaled,
             cmap=cmap_choice,
