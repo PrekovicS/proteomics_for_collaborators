@@ -65,7 +65,14 @@ if page == "Volcano Plot (DE Results)":
             top_n = st.selectbox("Label top significant genes:", [0, 5, 10, 25, 50])
             gene_to_highlight = st.text_input("Highlight a specific gene (optional):")
 
-            df["neglog10p"] = -np.log10(df[p_col])
+            # Ensure numeric p-values
+df[p_col] = pd.to_numeric(df[p_col], errors="coerce")
+
+# Remove rows with missing p-values
+df = df.dropna(subset=[p_col])
+
+df["neglog10p"] = -np.log10(df[p_col])
+
             df["sig"] = "NS"
             df.loc[(df["logFC"] > logfc_thresh) & (df[p_col] < p_thresh), "sig"] = "UP"
             df.loc[(df["logFC"] < -logfc_thresh) & (df[p_col] < p_thresh), "sig"] = "DOWN"
